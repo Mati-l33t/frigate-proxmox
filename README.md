@@ -1,6 +1,6 @@
 # 🎥 Frigate NVR — Proxmox LXC Installer
 
-A standalone Proxmox VE script that installs [Frigate NVR](https://frigate.video/) as a native LXC container — no Docker required.
+A standalone Proxmox VE helper script that installs [Frigate NVR](https://frigate.video/) as a native LXC container — no Docker required.
 
 > 🌐 **Website:** [proxmox-scripts.com](https://proxmox-scripts.com/)  
 > 🐙 **GitHub:** [github.com/Mati-l33t/frigate-proxmox](https://github.com/Mati-l33t/frigate-proxmox)
@@ -13,6 +13,7 @@ A standalone Proxmox VE script that installs [Frigate NVR](https://frigate.video
 - **AVX auto-detection** — automatically selects the correct object detector based on your CPU
   - CPUs **with AVX** (Intel Sandy Bridge 2011+): OpenVino hardware-accelerated detector
   - CPUs **without AVX** (e.g. Xeon X5650, older Westmere): CPU/TFLite detector — no crashes
+- **Automatic device passthrough** — detects and configures hardware acceleration automatically
 - **Default & Advanced install modes** — simple one-click defaults or full control over every setting
 - **Built-in update utility** — run `update` inside the container to upgrade Frigate
 - **Clean MOTD** — shows hostname and IP on every login
@@ -58,6 +59,20 @@ When choosing **Advanced**, you can configure:
 - SSH access
 - Privileged or Unprivileged container
 - Verbose install output
+
+---
+
+## 🔌 Automatic Device Passthrough
+
+The installer automatically detects and configures hardware passthrough before the container starts — no manual configuration needed.
+
+| Device | Detection Method | Notes |
+|---|---|---|
+| Intel/AMD GPU | `/dev/dri` present on host | Enables VAAPI hardware video decoding |
+| Google Coral USB | `lsusb` vendor ID scan | Fast hardware object detection |
+| Google Coral PCIe | `lspci` device scan | Fast hardware object detection |
+
+If no supported devices are detected, nothing is added and the install continues normally.
 
 ---
 
@@ -114,13 +129,14 @@ update
 | Intel Sandy Bridge (2011+) | OpenVino | AVX required |
 | Intel Xeon X5650 / Westmere | CPU/TFLite | No AVX — auto-detected |
 | Any x86_64 CPU | CPU/TFLite | Universal fallback |
-| Google Coral TPU | Edge TPU | Manual config required |
+| Google Coral TPU | Edge TPU | Auto passthrough |
+| Intel/AMD iGPU | VAAPI | Auto passthrough via /dev/dri |
 
 ---
 
 ## 📋 Requirements
 
-- Proxmox VE 7.x or 8.x
+- Proxmox VE 7.x or 8.x (tested on 8.4.14)
 - At least 20GB disk space
 - At least 4GB RAM
 - Internet access from the Proxmox host
