@@ -19,11 +19,20 @@ msg_ok()    { echo -e "${TAB}${CM}  ✔️   ${1}${CL}"; }
 msg_error() { echo -e "${TAB}${RD}  ✖️   ${1}${CL}"; exit 1; }
 
 # ─────────────────────────────────────────────
+# Auto-login (no password set)
+mkdir -p /etc/systemd/system/container-getty@1.service.d
+cat > /etc/systemd/system/container-getty@1.service.d/override.conf << 'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud tty%I 115200,38400,9600 $TERM
+EOF
+systemctl daemon-reload
+
 # Disable IPv6 to prevent connection failures
 # ─────────────────────────────────────────────
 echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
 echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
-sysctl -p -q
+sysctl -p -q 2>/dev/null || true
 
 # ─────────────────────────────────────────────
 # AVX detection for OpenVino
