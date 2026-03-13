@@ -5,6 +5,11 @@
 # License: MIT | https://github.com/Mati-l33t/frigate-proxmox/raw/main/LICENSE
 # Source: https://frigate.video/ | Github: https://github.com/blakeblackshear/frigate
 
+# Safety check — must run inside an LXC container, not on the Proxmox host
+if [ -f /etc/pve/version ]; then
+  echo "ERROR: This script must run inside an LXC container, not on the Proxmox host!"
+  exit 1
+fi
 set -euo pipefail
 
 YW="\033[33m"
