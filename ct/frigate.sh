@@ -55,11 +55,18 @@ EOF
 # Storage helpers
 # ─────────────────────────────────────────────
 get_container_storages() {
-  pvesm status -content rootdir 2>/dev/null | awk 'NR>1 {print $1, $5}' | while read -r name avail; do
-    local free_gb=$(echo "$avail" | awk '{printf "%.0f", $1/1073741824}')
-    echo "$name ${free_gb}GB_free"
-  done
+  pvesm status -content rootdir 2>/dev/null | awk 'NR>1 {
+    avail=$5; total=$4
+    if (total > 0) {
+      pct_used = int((total - avail) * 100 / total)
+      free_gb = int(avail / 1073741824)
+      printf "%s %dGB_free\n", $1, free_gb
+    } else {
+      printf "%s available\n", $1
+    }
+  }'
 }
+
 
 get_template_storages() {
   pvesm status -content vztmpl 2>/dev/null | awk 'NR>1 {print $1}'
@@ -119,6 +126,95 @@ get_template() {
   fi
   pveam download "$storage" "$tmpl" >/dev/null 2>&1
   echo "${storage}:vztmpl/${tmpl}"
+}
+
+# ─────────────────────────────────────────────
+# Device passthrough detection
+# ─────────────────────────────────────────────
+detect_passthrough() {
+  GPU_PASSTHROUGH="no"
+  CORAL_USB_PASSTHROUGH="no"
+  CORAL_PCIE_PASSTHROUGH="no"
+
+  # Detect Intel/AMD GPU (/dev/dri)
+  if [ -d /dev/dri ] && ls /dev/dri/renderD* >/dev/null 2>&1; then
+    GPU_PASSTHROUGH="yes"
+  fi
+
+  # Detect Google Coral USB (vendor ID 1a6e or 18d1)
+  if lsusb 2>/dev/null | grep -qE "1a6e:|18d1:9302"; then
+    CORAL_USB_PASSTHROUGH="yes"
+  fi
+
+  # Detect Google Coral PCIe
+  if lspci 2>/dev/null | grep -qi "Global Unichip\|089a"; then
+    CORAL_PCIE_PASSTHROUGH="yes"
+  fi
+}
+
+# ─────────────────────────────────────────────
+# Apply passthrough to container config
+# ─────────────────────────────────────────────
+apply_passthrough() {
+  local ctid="$1"
+  local conf="/etc/pve/lxc/${ctid}.conf"
+
+  # GPU passthrough (/dev/dri)
+  if [ "$GPU_PASSTHROUGH" = "yes" ]; then
+    local n=0
+    for dev in /dev/dri/*; do
+      local major minor
+      major=$(stat -c '%t' "$dev" 2>/dev/null | xargs printf '%d')
+      minor=$(stat -c '%T' "$dev" 2>/dev/null | xargs printf '%d')
+      echo "lxc.cgroup2.devices.allow: c ${major}:${minor} rwm" >> "$conf"
+      echo "lxc.mount.entry: ${dev} dev/dri/$(basename $dev) none bind,optional,create=file 0 0" >> "$conf"
+      n=$((n+1))
+    done
+
+    # Get video and render GIDs from host
+    local video_gid render_gid
+    video_gid=$(getent group video 2>/dev/null | cut -d: -f3 || echo "44")
+    render_gid=$(getent group render 2>/dev/null | cut -d: -f3 || echo "104")
+
+    # Set matching GIDs inside container
+    pct exec "$ctid" -- sh -c "groupadd -g ${video_gid} video 2>/dev/null || true" >/dev/null 2>&1
+    pct exec "$ctid" -- sh -c "groupadd -g ${render_gid} render 2>/dev/null || true" >/dev/null 2>&1
+    pct exec "$ctid" -- sh -c "usermod -aG video,render root 2>/dev/null || true" >/dev/null 2>&1
+
+    msg_ok "GPU (/dev/dri) passthrough configured"
+  fi
+
+  # Coral USB passthrough
+  if [ "$CORAL_USB_PASSTHROUGH" = "yes" ]; then
+    local bus dev_path
+    while IFS= read -r line; do
+      if echo "$line" | grep -qE "1a6e:|18d1:9302"; then
+        bus=$(echo "$line" | awk '{print $2}')
+        dev_path=$(echo "$line" | awk '{print $4}' | tr -d ':')
+        local usb_dev="/dev/bus/usb/${bus}/${dev_path}"
+        if [ -e "$usb_dev" ]; then
+          local major minor
+          major=$(stat -c '%t' "$usb_dev" 2>/dev/null | xargs printf '%d')
+          minor=$(stat -c '%T' "$usb_dev" 2>/dev/null | xargs printf '%d')
+          echo "lxc.cgroup2.devices.allow: c ${major}:${minor} rwm" >> "$conf"
+          echo "lxc.mount.entry: ${usb_dev} dev/bus/usb/${bus}/${dev_path} none bind,optional,create=file 0 0" >> "$conf"
+        fi
+      fi
+    done < <(lsusb 2>/dev/null)
+    msg_ok "Google Coral USB passthrough configured"
+  fi
+
+  # Coral PCIe passthrough
+  if [ "$CORAL_PCIE_PASSTHROUGH" = "yes" ]; then
+    if [ -e /dev/apex_0 ]; then
+      local major minor
+      major=$(stat -c '%t' /dev/apex_0 2>/dev/null | xargs printf '%d')
+      minor=$(stat -c '%T' /dev/apex_0 2>/dev/null | xargs printf '%d')
+      echo "lxc.cgroup2.devices.allow: c ${major}:${minor} rwm" >> "$conf"
+      echo "lxc.mount.entry: /dev/apex_0 dev/apex_0 none bind,optional,create=file 0 0" >> "$conf"
+      msg_ok "Google Coral PCIe passthrough configured"
+    fi
+  fi
 }
 
 # ─────────────────────────────────────────────
@@ -301,6 +397,15 @@ build_container() {
     >/dev/null 2>&1
   msg_ok "LXC container ${CTID} created"
 
+  # Apply device passthrough before starting
+  msg_info "Detecting hardware for passthrough"
+  detect_passthrough
+  apply_passthrough "$CTID"
+
+  if [ "$GPU_PASSTHROUGH" = "no" ] && [ "$CORAL_USB_PASSTHROUGH" = "no" ] && [ "$CORAL_PCIE_PASSTHROUGH" = "no" ]; then
+    msg_ok "No passthrough devices detected"
+  fi
+
   msg_info "Starting container"
   pct start "$CTID"
   sleep 8
@@ -330,7 +435,7 @@ run_install() {
     pct exec "$CTID" -- bash -c "$(curl -fsSL $INSTALL_SCRIPT)"
   else
     pct exec "$CTID" -- bash -c "$(curl -fsSL $INSTALL_SCRIPT)" \
-      2>&1 | grep -E "^\[|✔️|✖️|INFO|ERROR|OK" || true
+      2>&1 | grep -E "✔️|✖️|⏳" || true
   fi
   msg_ok "Frigate installer finished"
 }
