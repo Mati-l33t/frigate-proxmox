@@ -459,9 +459,9 @@ run_install() {
   msg_ok "Frigate installer finished"
 }
 
-# ─────────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
+# Main 
+# ────────────────────────────────────────────
 header_info
 
 if whiptail --backtitle "Frigate NVR Installer" --title "INSTALL MODE" \
