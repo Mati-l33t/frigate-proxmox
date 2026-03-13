@@ -56,8 +56,19 @@ EOF
 # ─────────────────────────────────────────────
 get_container_storages() {
   pvesm status -content rootdir 2>/dev/null | awk 'NR>1 {
-    free_gb = int($5 / 1048576)
-    printf "%s %dGB_free\n", $1, free_gb
+    name=$1; type=$2; total=$4; avail=$5
+    free_gb  = avail  / 1024 / 1024 / 1024
+    used_gb  = (total - avail) / 1024 / 1024 / 1024
+    # Format with 1 decimal, handle TB
+    if (free_gb >= 1024)
+      free_str = sprintf("%.1fTB", free_gb/1024)
+    else
+      free_str = sprintf("%.1fGB", free_gb)
+    if (used_gb >= 1024)
+      used_str = sprintf("%.1fTB", used_gb/1024)
+    else
+      used_str = sprintf("%.1fGB", used_gb)
+    printf "%s (%s)|Free: %s  Used: %s\n", name, type, free_str, used_str
   }'
 }
 
@@ -66,20 +77,34 @@ get_template_storages() {
   pvesm status -content vztmpl 2>/dev/null | awk 'NR>1 {print $1}'
 }
 
+get_template_storages_with_info() {
+  pvesm status -content vztmpl 2>/dev/null | awk 'NR>1 {
+    name=$1; type=$2; total=$4; avail=$5
+    free_gb  = avail  / 1024 / 1024 / 1024
+    used_gb  = (total - avail) / 1024 / 1024 / 1024
+    if (free_gb >= 1024)
+      free_str = sprintf("%.1fTB", free_gb/1024)
+    else
+      free_str = sprintf("%.1fGB", free_gb)
+    if (used_gb >= 1024)
+      used_str = sprintf("%.1fTB", used_gb/1024)
+    else
+      used_str = sprintf("%.1fGB", used_gb)
+    printf "%s (%s)|Free: %s  Used: %s\n", name, type, free_str, used_str
+  }'
+}
+
 select_storage() {
   local type="$1"
   local items=()
   if [ "$type" = "container" ]; then
-    while IFS= read -r line; do
-      local name free
-      name=$(echo "$line" | awk '{print $1}')
-      free=$(echo "$line" | awk '{print $2}')
-      items+=("$name" "$free")
+    while IFS='|' read -r name desc; do
+      items+=("$name" "$desc")
     done < <(get_container_storages)
   else
-    while IFS= read -r name; do
-      items+=("$name" " ")
-    done < <(get_template_storages)
+    while IFS='|' read -r name desc; do
+      items+=("$name" "${desc:- }")
+    done < <(get_template_storages_with_info)
   fi
 
   local count=$(( ${#items[@]} / 2 ))
