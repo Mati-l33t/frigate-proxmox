@@ -56,14 +56,8 @@ EOF
 # ─────────────────────────────────────────────
 get_container_storages() {
   pvesm status -content rootdir 2>/dev/null | awk 'NR>1 {
-    avail=$5; total=$4
-    if (total > 0) {
-      pct_used = int((total - avail) * 100 / total)
-      free_gb = int(avail / 1073741824)
-      printf "%s %dGB_free\n", $1, free_gb
-    } else {
-      printf "%s available\n", $1
-    }
+    free_gb = int($5 / 1048576)
+    printf "%s %dGB_free\n", $1, free_gb
   }'
 }
 
