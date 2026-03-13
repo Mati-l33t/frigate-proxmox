@@ -69,8 +69,8 @@ select_storage() {
   fi
 
   whiptail --backtitle "Frigate NVR Installer" \
-    --title "SELECT STORAGE" \
-    --menu "\nSelect ${type} storage:" 16 58 8 \
+    --title "$([ "$type" = "template" ] && echo "TEMPLATE STORAGE" || echo "CONTAINER STORAGE")" \
+    --menu "\nWhere to store the ${type}?" 16 58 8 \
     "${names[@]}" \
     3>&1 1>&2 2>&3
 }
