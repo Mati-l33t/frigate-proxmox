@@ -1,6 +1,6 @@
 # 🎥 Frigate NVR — Proxmox LXC Installer
 
-A standalone Proxmox VE helper script that installs [Frigate NVR](https://frigate.video/) as a native LXC container — no Docker required.
+A standalone Proxmox VE script that installs [Frigate NVR](https://frigate.video/) as a native LXC container — no Docker required.
 
 > 🌐 **Website:** [proxmox-scripts.com](https://proxmox-scripts.com/)  
 > 🐙 **GitHub:** [github.com/Mati-l33t/frigate-proxmox](https://github.com/Mati-l33t/frigate-proxmox)
@@ -148,7 +148,3 @@ update
 MIT — see [LICENSE](LICENSE)
 
 ---
-
-<div align="center">
-  Made by <a href="https://proxmox-scripts.com">Mati-l33t</a>
-</div>
