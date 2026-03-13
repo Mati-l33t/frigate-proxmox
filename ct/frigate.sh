@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/Mati-l33t/frigate-proxmox/main/misc/build.func)
-# Copyright (c) 2021-2025 community-scripts ORG
-# Author: Mati-l33t
-# License: MIT | https://github.com/Mati-l33t/frigate-proxmox/raw/main/LICENSE
-# Source: https://frigate.video/
+source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+# Copyright (c) 2021-2026 community-scripts ORG
+# Authors: MickLesk (CanbiZ) | Co-Author: remz1337 | Co-Author: Mati-l33t
+# License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# Source: https://frigate.video/ | Github: https://github.com/blakeblackshear/frigate
 
 APP="Frigate"
 var_tags="${var_tags:-nvr;camera}"
-var_cpu="${var_cpu:-2}"
+var_cpu="${var_cpu:-4}"
 var_ram="${var_ram:-4096}"
 var_disk="${var_disk:-20}"
 var_os="${var_os:-debian}"
@@ -46,6 +46,8 @@ function update_script() {
 
 start
 build_container
+msg_info "Applying Frigate post-install fixes"
+pct exec $CTID -- bash -c "$(curl -fsSL https://raw.githubusercontent.com/Mati-l33t/frigate-proxmox/main/install/frigate-install.sh)"
 description
 
 msg_ok "Completed successfully!"
