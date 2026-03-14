@@ -370,14 +370,30 @@ build_container() {
 # Run install
 # ─────────────────────────────────────────────
 run_install() {
-  msg_info "Running Frigate installer inside container"
+  msg_info "Downloading install script"
+  curl -fsSL "$INSTALL_SCRIPT" -o /tmp/frigate-install.sh
+  msg_ok "Install script downloaded"
+
+  msg_info "Pushing install script into container"
+  pct push "$CTID" /tmp/frigate-install.sh /tmp/frigate-install.sh --perms 0755
+  rm -f /tmp/frigate-install.sh
+  msg_ok "Install script ready"
+
+  msg_info "Running Frigate installer inside container (this takes 15-30 minutes)"
   if [ "$VERB" = "yes" ]; then
-    pct exec "$CTID" -- bash -c "$(curl -fsSL $INSTALL_SCRIPT)"
+    pct exec "$CTID" -- bash /tmp/frigate-install.sh
   else
-    pct exec "$CTID" -- bash -c "$(curl -fsSL $INSTALL_SCRIPT)" \
-      2>&1 | grep -E "✔️|✖️|⏳" || true
+    pct exec "$CTID" -- bash /tmp/frigate-install.sh 2>&1 | grep -E "✔️|✖️|⏳" || true
   fi
-  msg_ok "Frigate installer finished"
+
+  # Verify Frigate actually started
+  sleep 5
+  if pct exec "$CTID" -- systemctl is-active frigate >/dev/null 2>&1; then
+    msg_ok "Frigate installer finished"
+  else
+    msg_error "Frigate service failed to start — enter container ${CTID} to debug"
+    exit 1
+  fi
 }
 
 # ─────────────────────────────────────────────
