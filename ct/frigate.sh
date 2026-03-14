@@ -82,7 +82,6 @@ get_template() {
   local storage="$1"
   local TEMPLATE_NAME="debian-12-standard_12.12-1_amd64.tar.zst"
 
-  # Check if template already exists locally
   local existing
   existing=$(pveam list "$storage" 2>/dev/null | awk '{print $1}' | grep -F "$TEMPLATE_NAME" | head -1)
   if [ -n "$existing" ]; then
@@ -90,7 +89,6 @@ get_template() {
     return
   fi
 
-  # Download the exact template
   msg_info "Downloading Debian 12 template"
   pveam update >/dev/null 2>&1
   if ! pveam download "$storage" "$TEMPLATE_NAME" >/dev/null 2>&1; then
@@ -386,7 +384,6 @@ run_install() {
     pct exec "$CTID" -- bash /tmp/frigate-install.sh 2>&1 | grep -E "✔️|✖️|⏳" || true
   fi
 
-  # Verify Frigate actually started
   sleep 5
   if pct exec "$CTID" -- systemctl is-active frigate >/dev/null 2>&1; then
     msg_ok "Frigate installer finished"
@@ -412,7 +409,14 @@ echo -e "${TAB}${BOLD}🚀 Creating Frigate LXC...${CL}"
 build_container
 run_install
 
+# Get the auto-generated Frigate password
+FRIGATE_PASS=$(pct exec "$CTID" -- journalctl -u frigate --no-pager 2>/dev/null | grep -oP 'Password: \K\S+' | tail -1)
+
 echo ""
 msg_ok "Frigate installation complete!"
-echo -e "${TAB}${GN}🌐 Web UI: ${BL}http://${IP}:5000${CL}"
-echo -e "${TAB}${YW}📝 Add your cameras to: /config/config.yml${CL}"
+echo ""
+echo -e "${TAB}${GN}🌐 Web UI: ${BL}http://${IP}:8971${CL}"
+echo -e "${TAB}${GN}🔑 Login: ${BL}admin${CL} / ${BL}${FRIGATE_PASS:-check logs}${CL}"
+echo -e "${TAB}${YW}🔓 Internal (no auth): ${BL}http://${IP}:5000${CL}"
+echo -e "${TAB}${YW}📝 Config: /config/config.yml${CL}"
+echo -e "${TAB}${YW}🔄 Update: run 'update' inside container${CL}"
