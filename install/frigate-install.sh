@@ -5,12 +5,16 @@
 # License: MIT | https://github.com/Mati-l33t/frigate-proxmox/raw/main/LICENSE
 # Source: https://frigate.video/ | Github: https://github.com/blakeblackshear/frigate
 
-# Safety check — must run inside an LXC container, not on the Proxmox host
+# ─────────────────────────────────────────────
+# Safety check — refuse to run on Proxmox host
+# ─────────────────────────────────────────────
 if [ -f /etc/pve/version ]; then
   echo "ERROR: This script must run inside an LXC container, not on the Proxmox host!"
   exit 1
 fi
+
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
 YW="\033[33m"
 GN="\033[1;92m"
@@ -24,24 +28,24 @@ msg_ok()    { echo -e "${TAB}${CM}  ✔️   ${1}${CL}"; }
 msg_error() { echo -e "${TAB}${RD}  ✖️   ${1}${CL}"; exit 1; }
 
 # ─────────────────────────────────────────────
-# Auto-login (no password set)
+# Auto-login
+# ─────────────────────────────────────────────
 mkdir -p /etc/systemd/system/container-getty@1.service.d
 cat > /etc/systemd/system/container-getty@1.service.d/override.conf << 'EOF'
 [Service]
 ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud tty%I 115200,38400,9600 $TERM
 EOF
-systemctl daemon-reload
 
-# Disable IPv6 to prevent connection failures
+# ─────────────────────────────────────────────
+# Disable IPv6
 # ─────────────────────────────────────────────
 echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
 echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
 sysctl -p -q 2>/dev/null || true
 
 # ─────────────────────────────────────────────
-# AVX detection for OpenVino
-# LXC containers share host CPU flags via /proc/cpuinfo
+# AVX detection
 # ─────────────────────────────────────────────
 if grep -qm1 'avx' /proc/cpuinfo; then
   INSTALL_OPENVINO="yes"
@@ -54,21 +58,22 @@ fi
 # ─────────────────────────────────────────────
 msg_info "Updating container OS"
 apt-get update -qq
-apt-get upgrade -y -qq
+apt-get upgrade -y -qq \
+  -o Dpkg::Options::="--force-confdef" \
+  -o Dpkg::Options::="--force-confold"
 msg_ok "Container OS updated"
 
 msg_info "Installing dependencies"
 apt-get install -y -qq \
+  -o Dpkg::Options::="--force-confdef" \
+  -o Dpkg::Options::="--force-confold" \
   curl wget git sudo unzip \
   ffmpeg \
   python3 python3-pip python3-venv \
   libsm6 libxext6 libtbb-dev libtbbmalloc2 libgomp1 \
-  ccache \
-  moreutils \
-  apt-transport-https \
-  ca-certificates \
-  build-essential \
-  pkg-config
+  ccache moreutils \
+  apt-transport-https ca-certificates \
+  build-essential pkg-config
 msg_ok "Dependencies installed"
 
 # ─────────────────────────────────────────────
@@ -138,12 +143,12 @@ if [ "$INSTALL_OPENVINO" = "yes" ]; then
     >/dev/null 2>&1
   msg_ok "OpenVino installed"
 else
-  msg_info "Skipping OpenVino (no AVX support on this CPU)"
+  msg_info "Skipping OpenVino (no AVX on this CPU)"
   msg_ok "OpenVino skipped"
 fi
 
 # ─────────────────────────────────────────────
-# Detection models (always downloaded)
+# Detection models
 # ─────────────────────────────────────────────
 msg_info "Downloading detection models"
 mkdir -p /opt/frigate/model_cache
@@ -162,7 +167,6 @@ curl -fsSL \
   -o "/opt/frigate/openvino-model/coco_91cl_bkgr.txt"
 
 sed -i 's/truck/car/g' /opt/frigate/openvino-model/coco_91cl_bkgr.txt
-
 ln -sf /opt/frigate/model_cache/cpu_model.tflite /cpu_model.tflite
 ln -sf /opt/frigate/model_cache/edgetpu_model.tflite /edgetpu_model.tflite
 ln -sf /opt/frigate/openvino-model /openvino-model
@@ -301,7 +305,6 @@ msg_ok()   { echo -e "${TAB}${CM}  ✔️   ${1}${CL}"; }
 msg_info "Stopping Frigate"
 systemctl stop frigate go2rtc
 msg_ok "Frigate stopped"
-
 msg_info "Updating Frigate"
 RELEASE=$(curl -fsSL https://api.github.com/repos/blakeblackshear/frigate/releases/latest \
   | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
@@ -312,13 +315,12 @@ source /opt/frigate/venv/bin/activate
 pip install --upgrade pip -q
 pip install -r /opt/frigate/docker/main/requirements-wheels.txt -q
 msg_ok "Frigate updated to ${RELEASE}"
-
 msg_info "Starting Frigate"
 systemctl start go2rtc frigate
 msg_ok "Frigate started"
 EOF
 chmod +x /usr/bin/update
-msg_ok "Update utility ready — run 'update' inside the container to upgrade"
+msg_ok "Update utility ready"
 
 # ─────────────────────────────────────────────
 # MOTD
