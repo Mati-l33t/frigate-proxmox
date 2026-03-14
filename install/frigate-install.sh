@@ -81,7 +81,7 @@ msg_ok "Dependencies installed"
 # ─────────────────────────────────────────────
 msg_info "Fetching latest Frigate release"
 FRIGATE_RELEASE=$(curl -fsSL https://api.github.com/repos/blakeblackshear/frigate/releases/latest \
-  | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+  | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' | grep -oE '^v[0-9]+\.[0-9]+\.[0-9]+')
 mkdir -p /opt/frigate
 cd /opt/frigate
 git clone --depth 1 --branch "${FRIGATE_RELEASE}" \
@@ -92,7 +92,7 @@ msg_ok "Fetched Frigate ${FRIGATE_RELEASE}"
 # Frigate's own dependency installer
 # ─────────────────────────────────────────────
 msg_info "Installing Frigate system dependencies"
-bash /opt/frigate/docker/main/install_deps.sh >/dev/null 2>&1
+DEBIAN_FRONTEND=noninteractive bash /opt/frigate/docker/main/install_deps.sh >/dev/null 2>&1
 msg_ok "Frigate system dependencies installed"
 
 # ─────────────────────────────────────────────
