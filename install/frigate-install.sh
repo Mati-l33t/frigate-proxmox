@@ -93,6 +93,8 @@ msg_ok "Fetched Frigate ${FRIGATE_RELEASE}"
 # Frigate's own dependency installer
 # ─────────────────────────────────────────────
 msg_info "Installing Frigate system dependencies"
+echo 'libedgetpu1-max libedgetpu/accepted-eula select true' | debconf-set-selections
+echo 'libedgetpu1-std libedgetpu/accepted-eula select true' | debconf-set-selections
 DEBIAN_FRONTEND=noninteractive TARGETARCH=amd64 bash /opt/frigate/docker/main/install_deps.sh >/dev/null 2>&1
 msg_ok "Frigate system dependencies installed"
 
