@@ -5,19 +5,19 @@
 # License: MIT | https://github.com/Mati-l33t/frigate-proxmox/raw/main/LICENSE
 # Source: https://frigate.video/ | Github: https://github.com/blakeblackshear/frigate
 #
-# Docker-to-LXC adaptation. Every fix below addresses a specific
-# difference between a Docker container and a Proxmox LXC:
-#
-#   1. frigate/version.py    — generated in Docker build, absent in git
-#   2. Web frontend          — built in separate Docker stage, needs npm
-#   3. vec0.so (sqlite-vec)  — built in Docker, needs deb-src for LXC
-#   4. ffmpeg path           — Docker: /usr/lib/ffmpeg/bin/  LXC: /usr/bin/
-#   5. nginx config          — Docker ships its own, LXC gets default
-#   6. nginx service         — Docker: s6-overlay  LXC: systemd
-#   7. go2rtc config         — Docker generates at runtime
-#   8. System-wide Python    — Docker has no venv restrictions
-#   9. PIP_BREAK_SYSTEM_PACKAGES — Debian 12 LXC blocks pip without it
-#  10. s6-overlay → systemd  — all process management replaced
+# Docker-to-LXC adaptation fixes:
+#   1.  frigate/version.py        — generated in Docker build, absent in git
+#   2.  Web frontend build        — separate Docker stage, needs npm + BASE_PATH fix
+#   3.  vec0.so (sqlite-vec)      — needs libsqlite3-dev
+#   4.  ffmpeg path               — Docker: /usr/lib/ffmpeg/bin/  LXC: /usr/bin/
+#   5.  nginx config              — auth bypass headers, jsmpeg proxy, log directives
+#   6.  nginx service             — systemd with tee for log capture
+#   7.  go2rtc config             — needs go2rtc.yaml
+#   8.  System-wide Python        — no venv, matches Docker
+#   9.  PIP_BREAK_SYSTEM_PACKAGES — Debian 12 requires it
+#  10.  s6-overlay → systemd      — all process management replaced
+#  11.  Auth bypass               — X-Server-Port + Remote-User headers
+#  12.  Log capture               — tee to /dev/shm/logs/ for UI log viewer
 
 # ─────────────────────────────────────────────
 # Safety check
@@ -53,8 +53,7 @@ ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud tty%I 115200,3840
 EOF
 
 # ─────────────────────────────────────────────
-# Disable IPv6 (prevents download failures on
-# networks without IPv6 connectivity)
+# Disable IPv6
 # ─────────────────────────────────────────────
 cat >> /etc/sysctl.conf << 'EOF'
 net.ipv6.conf.all.disable_ipv6 = 1
@@ -63,7 +62,7 @@ EOF
 sysctl -p -q 2>/dev/null || true
 
 # ─────────────────────────────────────────────
-# AVX detection — OpenVino needs AVX
+# AVX detection
 # ─────────────────────────────────────────────
 if grep -qm1 ' avx ' /proc/cpuinfo 2>/dev/null || grep -qm1 ' avx$' /proc/cpuinfo 2>/dev/null; then
   INSTALL_OPENVINO="yes"
@@ -72,8 +71,7 @@ else
 fi
 
 # ─────────────────────────────────────────────
-# APT sources — add deb-src (needed for
-# build_nginx.sh and build_sqlite_vec.sh)
+# APT sources with deb-src
 # ─────────────────────────────────────────────
 cat > /etc/apt/sources.list.d/debian.sources << 'SOURCES'
 Types: deb deb-src
@@ -108,13 +106,12 @@ apt-get install -y -qq \
   ccache moreutils \
   apt-transport-https ca-certificates gnupg \
   build-essential pkg-config cmake \
+  libsqlite3-dev \
   lsb-release
 msg_ok "Base dependencies installed"
 
 # ─────────────────────────────────────────────
 # FIX #4: ffmpeg path symlinks
-# Frigate hardcodes /usr/lib/ffmpeg/bin/ffmpeg
-# (Docker path). System ffmpeg is at /usr/bin/.
 # ─────────────────────────────────────────────
 msg_info "Creating ffmpeg compatibility symlinks"
 mkdir -p /usr/lib/ffmpeg/bin
@@ -123,7 +120,7 @@ ln -sf "$(command -v ffprobe)" /usr/lib/ffmpeg/bin/ffprobe
 msg_ok "ffmpeg symlinks created"
 
 # ─────────────────────────────────────────────
-# Node.js 20 (FIX #2: needed for web build)
+# Node.js 20
 # ─────────────────────────────────────────────
 msg_info "Installing Node.js 20"
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
@@ -146,28 +143,23 @@ msg_ok "Fetched Frigate ${FRIGATE_RELEASE}"
 
 # ─────────────────────────────────────────────
 # FIX #1: Create frigate/version.py
-# This file is generated during Docker build
-# and doesn't exist in the git repo.
 # ─────────────────────────────────────────────
 msg_info "Creating version module"
 echo "VERSION = '${FRIGATE_VERSION}'" > /opt/frigate/frigate/version.py
 msg_ok "version.py created (${FRIGATE_VERSION})"
 
 # ─────────────────────────────────────────────
-# Frigate's own dependency installer
+# Frigate system dependencies
 # ─────────────────────────────────────────────
-msg_info "Installing Frigate system dependencies (this takes a few minutes)"
+msg_info "Installing Frigate system dependencies (takes a few minutes)"
 echo 'libedgetpu1-max libedgetpu/accepted-eula select true' | debconf-set-selections
 echo 'libedgetpu1-std libedgetpu/accepted-eula select true' | debconf-set-selections
-# install_deps.sh expects Docker env vars; set them for LXC compatibility
 export TARGETARCH=amd64
-bash /opt/frigate/docker/main/install_deps.sh >/dev/null 2>&1 || {
-  msg_info "install_deps.sh had warnings (expected for LXC), continuing"
-}
+bash /opt/frigate/docker/main/install_deps.sh >/dev/null 2>&1 || true
 msg_ok "Frigate system dependencies installed"
 
 # ─────────────────────────────────────────────
-# Build nginx with vod module
+# Build nginx
 # ─────────────────────────────────────────────
 msg_info "Building nginx (takes 3-5 minutes)"
 apt-get update -qq
@@ -176,16 +168,16 @@ ln -sf /usr/local/nginx/sbin/nginx /usr/local/bin/nginx 2>/dev/null || true
 msg_ok "nginx built"
 
 # ─────────────────────────────────────────────
-# FIX #3: Build sqlite-vec (vec0.so)
-# Required for Frigate's embedding/search.
+# FIX #3: Build sqlite-vec (needs libsqlite3-dev)
 # ─────────────────────────────────────────────
 msg_info "Building sqlite-vec extension"
 if [ -f /opt/frigate/docker/main/build_sqlite_vec.sh ]; then
   bash /opt/frigate/docker/main/build_sqlite_vec.sh >/dev/null 2>&1 || {
-    msg_info "sqlite-vec build had issues, attempting manual build"
+    msg_info "Frigate's build script failed, building manually"
     cd /tmp
     SQLVEC_VER=$(curl -fsSL https://api.github.com/repos/asg017/sqlite-vec/releases/latest \
       | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    rm -rf /tmp/sqlite-vec
     git clone --depth 1 --branch "${SQLVEC_VER}" https://github.com/asg017/sqlite-vec.git >/dev/null 2>&1
     cd sqlite-vec
     make loadable >/dev/null 2>&1
@@ -194,10 +186,10 @@ if [ -f /opt/frigate/docker/main/build_sqlite_vec.sh ]; then
     rm -rf /tmp/sqlite-vec
   }
 else
-  msg_info "build_sqlite_vec.sh not found, building manually"
   cd /tmp
   SQLVEC_VER=$(curl -fsSL https://api.github.com/repos/asg017/sqlite-vec/releases/latest \
     | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+  rm -rf /tmp/sqlite-vec
   git clone --depth 1 --branch "${SQLVEC_VER}" https://github.com/asg017/sqlite-vec.git >/dev/null 2>&1
   cd sqlite-vec
   make loadable >/dev/null 2>&1
@@ -221,10 +213,7 @@ ln -sf /usr/local/go2rtc/bin/go2rtc /usr/local/bin/go2rtc
 msg_ok "go2rtc ${GO2RTC_RELEASE} deployed"
 
 # ─────────────────────────────────────────────
-# FIX #8/#9: Python deps — system-wide, no venv
-# Matches Docker behavior exactly. The container
-# is dedicated to Frigate so no isolation needed.
-# PIP_BREAK_SYSTEM_PACKAGES is exported at top.
+# FIX #8/#9: Python deps system-wide
 # ─────────────────────────────────────────────
 msg_info "Installing Python dependencies"
 pip3 install --upgrade pip -q 2>/dev/null
@@ -234,7 +223,7 @@ fi
 msg_ok "Python dependencies installed"
 
 # ─────────────────────────────────────────────
-# OpenVino (only on AVX-capable CPUs)
+# OpenVino (AVX only)
 # ─────────────────────────────────────────────
 if [ "$INSTALL_OPENVINO" = "yes" ]; then
   msg_info "Installing OpenVino (AVX detected)"
@@ -247,9 +236,7 @@ else
 fi
 
 # ─────────────────────────────────────────────
-# FIX #2: Build web frontend
-# In Docker this happens in a separate build
-# stage. For LXC we build in-place.
+# FIX #2: Build web frontend + BASE_PATH fix
 # ─────────────────────────────────────────────
 msg_info "Building web frontend (takes 3-8 minutes)"
 cd /opt/frigate/web
@@ -259,33 +246,33 @@ npm run build 2>&1 | tail -5
 if [ ! -d /opt/frigate/web/dist ]; then
   msg_error "Web frontend build failed — dist/ directory not created"
 fi
+# Replace BASE_PATH placeholder in all built files
+find /opt/frigate/web/dist -type f \( -name "*.js" -o -name "*.html" -o -name "*.css" \) \
+  -exec sed -i 's|/BASE_PATH/|/|g' {} +
+find /opt/frigate/web/dist -type f \( -name "*.js" -o -name "*.html" -o -name "*.css" \) \
+  -exec sed -i 's|BASE_PATH/|/|g' {} +
 cd /opt/frigate
 msg_ok "Web frontend built"
 
 # ─────────────────────────────────────────────
-# Detection models & Docker-path symlinks
+# Detection models & symlinks
 # ─────────────────────────────────────────────
 msg_info "Downloading detection models"
-mkdir -p /opt/frigate/model_cache
-mkdir -p /opt/frigate/openvino-model
+mkdir -p /opt/frigate/model_cache /opt/frigate/openvino-model
 
-# CPU TFLite model
 curl -fsSL \
   "https://github.com/google-coral/test_data/raw/release-frogfish/ssdlite_mobiledet_coco_qat_postprocess.tflite" \
   -o "/opt/frigate/model_cache/cpu_model.tflite"
 
-# Edge TPU model
 curl -fsSL \
   "https://github.com/google-coral/test_data/raw/release-frogfish/ssdlite_mobiledet_coco_qat_postprocess_edgetpu.tflite" \
   -o "/opt/frigate/model_cache/edgetpu_model.tflite"
 
-# COCO labelmap
 curl -fsSL \
   "https://github.com/openvinotoolkit/open_model_zoo/raw/master/data/dataset_classes/coco_91cl_bkgr.txt" \
   -o "/opt/frigate/openvino-model/coco_91cl_bkgr.txt"
 sed -i 's/truck/car/g' /opt/frigate/openvino-model/coco_91cl_bkgr.txt
 
-# Docker-compatible root-level symlinks
 ln -sf /opt/frigate/model_cache/cpu_model.tflite /cpu_model.tflite
 ln -sf /opt/frigate/model_cache/edgetpu_model.tflite /edgetpu_model.tflite
 ln -sf /opt/frigate/openvino-model /openvino-model
@@ -293,7 +280,7 @@ ln -sf /opt/frigate/openvino-model/coco_91cl_bkgr.txt /labelmap.txt
 msg_ok "Detection models downloaded"
 
 # ─────────────────────────────────────────────
-# Sample video for test camera
+# Sample video
 # ─────────────────────────────────────────────
 msg_info "Downloading sample detection video"
 mkdir -p /media/frigate
@@ -313,7 +300,7 @@ DETECT_THREADS=$(( CPU_THREADS / 2 ))
 [ "$DETECT_THREADS" -lt 2 ] && DETECT_THREADS=2
 
 if [ "$INSTALL_OPENVINO" = "yes" ]; then
-  cat > /config/config.yml <<EOF
+  cat > /config/config.yml << FRIGATECONF
 mqtt:
   enabled: false
 
@@ -350,9 +337,9 @@ snapshots:
   enabled: false
 
 version: 0.14
-EOF
+FRIGATECONF
 else
-  cat > /config/config.yml <<EOF
+  cat > /config/config.yml << FRIGATECONF
 mqtt:
   enabled: false
 
@@ -384,7 +371,7 @@ snapshots:
   enabled: false
 
 version: 0.14
-EOF
+FRIGATECONF
 fi
 msg_ok "Frigate configuration written"
 
@@ -405,41 +392,56 @@ EOF
 msg_ok "go2rtc configuration written"
 
 # ─────────────────────────────────────────────
-# FIX #5: nginx reverse proxy config
-# Frigate's FastAPI listens on 127.0.0.1:5001.
-# nginx proxies port 5000 → 5001 with websocket
-# support, matching the Docker setup.
+# FIX #5/#11: nginx config with auth bypass,
+# jsmpeg proxy, and log directives
 # ─────────────────────────────────────────────
 msg_info "Writing nginx configuration"
 cat > /usr/local/nginx/conf/nginx.conf << 'NGINXCONF'
 worker_processes auto;
-daemon off;
-
-events {
-    worker_connections 1024;
-}
-
+error_log /dev/shm/logs/nginx/current warn;
+events { worker_connections 1024; }
 http {
-    include       mime.types;
-    default_type  application/octet-stream;
-    sendfile      on;
+    include mime.types;
+    default_type application/octet-stream;
+    sendfile on;
     keepalive_timeout 65;
     client_max_body_size 100M;
+    gzip on;
+    gzip_types text/plain application/javascript text/css application/json;
+    access_log /dev/shm/logs/nginx/current;
 
-    upstream frigate_api {
-        server 127.0.0.1:5001;
-    }
-
-    upstream frigate_mqtt_ws {
-        server 127.0.0.1:5002;
-    }
+    upstream frigate_api { server 127.0.0.1:5001; }
+    upstream frigate_mqtt_ws { server 127.0.0.1:5002; }
 
     server {
         listen 5000;
 
-        # Websocket for live event updates
+        # Event websocket
         location /ws {
             proxy_pass http://frigate_mqtt_ws/ws;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Server-Port 5000;
+            proxy_read_timeout 86400;
+        }
+
+        # Frigate API — strip /api/ prefix, bypass auth
+        location /api/ {
+            proxy_pass http://frigate_api/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Server-Port 5000;
+            proxy_set_header Remote-User "anonymous";
+            proxy_set_header Remote-Role "admin";
+            proxy_buffering off;
+        }
+
+        # jsmpeg live camera streams (port 8082)
+        location /live/jsmpeg/ {
+            proxy_pass http://127.0.0.1:8082/;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";
@@ -447,16 +449,7 @@ http {
             proxy_read_timeout 86400;
         }
 
-        # go2rtc API and WebRTC
-        location /api/go2rtc/ {
-            proxy_pass http://127.0.0.1:1984/;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-        }
-
-        # Live camera streams via go2rtc
+        # go2rtc live streams
         location /live/ {
             proxy_pass http://127.0.0.1:1984/;
             proxy_http_version 1.1;
@@ -465,16 +458,16 @@ http {
             proxy_set_header Host $host;
         }
 
-        # Everything else → FastAPI (serves API + web UI)
+        # Static assets
+        location /assets/ { alias /opt/frigate/web/dist/assets/; }
+        location /fonts/ { alias /opt/frigate/web/dist/fonts/; }
+        location /images/ { alias /opt/frigate/web/dist/images/; }
+        location /locales/ { alias /opt/frigate/web/dist/locales/; }
+
+        # SPA fallback
         location / {
-            proxy_pass http://frigate_api;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_buffering off;
+            root /opt/frigate/web/dist;
+            try_files $uri /index.html;
         }
     }
 }
@@ -482,11 +475,11 @@ NGINXCONF
 msg_ok "nginx configuration written"
 
 # ─────────────────────────────────────────────
-# FIX #6/#10: Systemd services replacing s6-overlay
+# FIX #6/#10/#12: Systemd services with log capture
 # ─────────────────────────────────────────────
 msg_info "Creating systemd services"
 
-# Shared memory log dirs (Frigate writes here)
+# Shared memory log dirs
 cat > /etc/systemd/system/frigate-shm.service << 'EOF'
 [Unit]
 Description=Frigate shared memory log setup
@@ -501,24 +494,23 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
 
-# go2rtc — runs independently so RTSP streams
-# survive Frigate restarts
-cat > /etc/systemd/system/go2rtc.service << 'EOF'
+# go2rtc with log capture
+cat > /etc/systemd/system/go2rtc.service << 'GOEOF'
 [Unit]
 Description=go2rtc
 After=network.target frigate-shm.service
 
 [Service]
-ExecStart=/usr/local/go2rtc/bin/go2rtc -config /config/go2rtc.yaml
+ExecStart=/bin/bash -c "/usr/local/go2rtc/bin/go2rtc -config /config/go2rtc.yaml 2>&1 | tee /dev/shm/logs/go2rtc/current"
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
+GOEOF
 
-# Frigate — main NVR process
-cat > /etc/systemd/system/frigate.service << 'EOF'
+# Frigate with log capture
+cat > /etc/systemd/system/frigate.service << 'FRIEOF'
 [Unit]
 Description=Frigate NVR
 After=network.target frigate-shm.service go2rtc.service
@@ -526,16 +518,16 @@ After=network.target frigate-shm.service go2rtc.service
 [Service]
 WorkingDirectory=/opt/frigate
 Environment="CONFIG_FILE=/config/config.yml"
-ExecStart=/usr/bin/python3 -m frigate
+ExecStart=/bin/bash -c "/usr/bin/python3 -m frigate 2>&1 | tee /dev/shm/logs/frigate/current"
 Restart=on-failure
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-EOF
+FRIEOF
 
-# nginx — reverse proxy on port 5000
-cat > /etc/systemd/system/frigate-nginx.service << 'EOF'
+# nginx — logs via config directives, not tee
+cat > /etc/systemd/system/frigate-nginx.service << 'NGEOF'
 [Unit]
 Description=Frigate Nginx Proxy
 After=network.target frigate.service
@@ -547,19 +539,25 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
+NGEOF
 
 systemctl daemon-reload
 systemctl enable -q frigate-shm go2rtc frigate frigate-nginx
 
-# Start in correct order with waits
+# Start in order
 systemctl start frigate-shm
 systemctl start go2rtc
 sleep 2
 systemctl start frigate
-sleep 5
+sleep 10
 systemctl start frigate-nginx
 msg_ok "Systemd services created and started"
+
+# ─────────────────────────────────────────────
+# Capture auto-generated Frigate credentials
+# ─────────────────────────────────────────────
+FRIGATE_PASS=$(journalctl -u frigate --no-pager 2>/dev/null | grep -oP 'Password: \K\S+' | tail -1)
+FRIGATE_USER="admin"
 
 # ─────────────────────────────────────────────
 # Update utility
@@ -567,13 +565,10 @@ msg_ok "Systemd services created and started"
 msg_info "Setting up update utility"
 cat > /usr/bin/update << 'UPDATEEOF'
 #!/usr/bin/env bash
-# Frigate LXC update utility
-
 export PIP_BREAK_SYSTEM_PACKAGES=1
 YW="\033[33m"; CM="\033[0;92m"; RD="\033[01;31m"; CL="\033[m"; TAB="  "
 msg_info() { echo -e "${TAB}${YW}  ⏳ ${1}...${CL}"; }
 msg_ok()   { echo -e "${TAB}${CM}  ✔️   ${1}${CL}"; }
-msg_error(){ echo -e "${TAB}${RD}  ✖️   ${1}${CL}"; }
 
 CURRENT=$(/usr/bin/python3 -c "from frigate.version import VERSION; print(VERSION)" 2>/dev/null || echo "unknown")
 LATEST=$(curl -fsSL https://api.github.com/repos/blakeblackshear/frigate/releases/latest \
@@ -607,12 +602,16 @@ cd /opt/frigate/web
 export VITE_APP_VERSION="${LATEST_VER}"
 npm install --loglevel=error 2>&1 | tail -3
 npm run build 2>&1 | tail -3
+find /opt/frigate/web/dist -type f \( -name "*.js" -o -name "*.html" -o -name "*.css" \) \
+  -exec sed -i 's|/BASE_PATH/|/|g' {} +
+find /opt/frigate/web/dist -type f \( -name "*.js" -o -name "*.html" -o -name "*.css" \) \
+  -exec sed -i 's|BASE_PATH/|/|g' {} +
 cd /opt/frigate
 msg_ok "Web frontend rebuilt"
 
 msg_info "Starting services"
 systemctl start go2rtc frigate
-sleep 3
+sleep 5
 systemctl start frigate-nginx
 msg_ok "Frigate updated to ${LATEST_VER}"
 UPDATEEOF
@@ -657,5 +656,11 @@ if [ "$INSTALL_OPENVINO" = "yes" ]; then
 else
   msg_ok "Detector: CPU/TFLite with ${DETECT_THREADS} threads"
 fi
-msg_ok "Web UI: http://${IP}:5000"
+IP=$(hostname -I | awk '{print $1}')
+msg_ok "Web UI (no auth): http://${IP}:5000"
+if [ -n "${FRIGATE_PASS:-}" ]; then
+  msg_ok "Default login: ${FRIGATE_USER} / ${FRIGATE_PASS}"
+else
+  msg_ok "Login credentials in: journalctl -u frigate | grep Password"
+fi
 msg_ok "Config: /config/config.yml"
