@@ -93,7 +93,7 @@ msg_ok "Fetched Frigate ${FRIGATE_RELEASE}"
 # Frigate's own dependency installer
 # ─────────────────────────────────────────────
 msg_info "Installing Frigate system dependencies"
-DEBIAN_FRONTEND=noninteractive bash /opt/frigate/docker/main/install_deps.sh >/dev/null 2>&1
+DEBIAN_FRONTEND=noninteractive TARGETARCH=amd64 bash /opt/frigate/docker/main/install_deps.sh >/dev/null 2>&1
 msg_ok "Frigate system dependencies installed"
 
 # ─────────────────────────────────────────────
