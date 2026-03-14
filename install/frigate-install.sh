@@ -275,11 +275,11 @@ EOF
 cat > /etc/systemd/system/go2rtc.service <<EOF
 [Unit]
 Description=go2rtc
-After=network.target frigate-shm.service
+After=network.target
 
 [Service]
 WorkingDirectory=/usr/local/go2rtc
-ExecStart=/bin/bash -c "bash /opt/frigate/docker/main/rootfs/etc/s6-overlay/s6-rc.d/go2rtc/run 2> >(/usr/bin/ts '%%Y-%%m-%%d %%H:%%M:%%.S ' >&2) | /usr/bin/ts '%%Y-%%m-%%d %%H:%%M:%%.S '"
+ExecStart=/usr/local/bin/go2rtc -config /config/go2rtc.yaml
 Restart=on-failure
 RestartSec=5
 
@@ -294,7 +294,9 @@ After=network.target frigate-shm.service go2rtc.service
 
 [Service]
 WorkingDirectory=/opt/frigate
-ExecStart=/bin/bash -c "bash /opt/frigate/docker/main/rootfs/etc/s6-overlay/s6-rc.d/frigate/run 2> >(/usr/bin/ts '%%Y-%%m-%%d %%H:%%M:%%.S ' >&2) | /usr/bin/ts '%%Y-%%m-%%d %%H:%%M:%%.S '"
+Environment="CONFIG_FILE=/config/config.yml"
+Environment="FRIGATE_DEFAULT_CAMERAS_FFMPEG_OUTPUT_ARGS=-f segment -segment_time 10 -segment_format mp4 -reset_timestamps 1 -strftime 1 -c copy -an"
+ExecStart=/opt/frigate/venv/bin/python3 -m frigate
 Restart=on-failure
 RestartSec=10
 
