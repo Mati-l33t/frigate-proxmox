@@ -82,6 +82,7 @@ msg_ok "Dependencies installed"
 msg_info "Fetching latest Frigate release"
 FRIGATE_RELEASE=$(curl -fsSL https://api.github.com/repos/blakeblackshear/frigate/releases/latest \
   | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' | grep -oE '^v[0-9]+\.[0-9]+\.[0-9]+')
+rm -rf /opt/frigate
 mkdir -p /opt/frigate
 cd /opt/frigate
 git -c advice.detachedHead=false clone --depth 1 --branch "${FRIGATE_RELEASE}" \
