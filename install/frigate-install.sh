@@ -5,19 +5,21 @@
 # License: MIT | https://github.com/Mati-l33t/frigate-proxmox/raw/main/LICENSE
 # Source: https://frigate.video/ | Github: https://github.com/blakeblackshear/frigate
 #
-# Docker-to-LXC adaptation fixes:
-#   1.  frigate/version.py        — generated in Docker build, absent in git
-#   2.  Web frontend build        — separate Docker stage, needs npm + BASE_PATH fix
+# Docker-to-LXC adaptation — all fixes from manual testing:
+#   1.  frigate/version.py        — absent in git, created from tag
+#   2.  Web frontend + BASE_PATH  — npm build + sed replacement
 #   3.  vec0.so (sqlite-vec)      — needs libsqlite3-dev
-#   4.  ffmpeg path               — Docker: /usr/lib/ffmpeg/bin/  LXC: /usr/bin/
-#   5.  nginx config              — auth bypass headers, jsmpeg proxy, log directives
-#   6.  nginx service             — systemd with tee for log capture
-#   7.  go2rtc config             — needs go2rtc.yaml
+#   4.  ffmpeg path symlinks      — Docker /usr/lib/ffmpeg/bin/ → /usr/bin/
+#   5.  nginx dual-port config    — 8971 (auth) + 5000 (no auth)
+#   6.  nginx log directives      — writes to /dev/shm/logs/nginx/
+#   7.  go2rtc.yaml               — minimal config file
 #   8.  System-wide Python        — no venv, matches Docker
 #   9.  PIP_BREAK_SYSTEM_PACKAGES — Debian 12 requires it
-#  10.  s6-overlay → systemd      — all process management replaced
-#  11.  Auth bypass               — X-Server-Port + Remote-User headers
-#  12.  Log capture               — tee to /dev/shm/logs/ for UI log viewer
+#  10.  s6-overlay → systemd      — all services replaced
+#  11.  Auth bypass on port 5000  — X-Server-Port + Remote-User headers
+#  12.  Log capture via systemd   — StandardOutput=append for UI log viewer
+#  13.  Restart=always            — survives web UI restart action
+#  14.  jsmpeg proxy to 8082      — live camera websocket streams
 
 # ─────────────────────────────────────────────
 # Safety check
@@ -111,7 +113,7 @@ apt-get install -y -qq \
 msg_ok "Base dependencies installed"
 
 # ─────────────────────────────────────────────
-# FIX #4: ffmpeg path symlinks
+# ffmpeg path symlinks
 # ─────────────────────────────────────────────
 msg_info "Creating ffmpeg compatibility symlinks"
 mkdir -p /usr/lib/ffmpeg/bin
@@ -142,7 +144,7 @@ git -c advice.detachedHead=false clone --depth 1 --branch "${FRIGATE_RELEASE}" \
 msg_ok "Fetched Frigate ${FRIGATE_RELEASE}"
 
 # ─────────────────────────────────────────────
-# FIX #1: Create frigate/version.py
+# Create frigate/version.py
 # ─────────────────────────────────────────────
 msg_info "Creating version module"
 echo "VERSION = '${FRIGATE_VERSION}'" > /opt/frigate/frigate/version.py
@@ -168,7 +170,7 @@ ln -sf /usr/local/nginx/sbin/nginx /usr/local/bin/nginx 2>/dev/null || true
 msg_ok "nginx built"
 
 # ─────────────────────────────────────────────
-# FIX #3: Build sqlite-vec (needs libsqlite3-dev)
+# Build sqlite-vec
 # ─────────────────────────────────────────────
 msg_info "Building sqlite-vec extension"
 if [ -f /opt/frigate/docker/main/build_sqlite_vec.sh ]; then
@@ -213,7 +215,7 @@ ln -sf /usr/local/go2rtc/bin/go2rtc /usr/local/bin/go2rtc
 msg_ok "go2rtc ${GO2RTC_RELEASE} deployed"
 
 # ─────────────────────────────────────────────
-# FIX #8/#9: Python deps system-wide
+# Python deps system-wide
 # ─────────────────────────────────────────────
 msg_info "Installing Python dependencies"
 pip3 install --upgrade pip -q 2>/dev/null
@@ -236,7 +238,7 @@ else
 fi
 
 # ─────────────────────────────────────────────
-# FIX #2: Build web frontend + BASE_PATH fix
+# Build web frontend + BASE_PATH fix
 # ─────────────────────────────────────────────
 msg_info "Building web frontend (takes 3-8 minutes)"
 cd /opt/frigate/web
@@ -376,7 +378,7 @@ fi
 msg_ok "Frigate configuration written"
 
 # ─────────────────────────────────────────────
-# FIX #7: go2rtc config
+# go2rtc config
 # ─────────────────────────────────────────────
 msg_info "Writing go2rtc configuration"
 cat > /config/go2rtc.yaml << 'EOF'
@@ -392,14 +394,17 @@ EOF
 msg_ok "go2rtc configuration written"
 
 # ─────────────────────────────────────────────
-# FIX #5/#11: nginx config with auth bypass,
-# jsmpeg proxy, and log directives
+# nginx config — dual port setup
+# Port 8971: authenticated (main UI)
+# Port 5000: unauthenticated (HA integration)
 # ─────────────────────────────────────────────
 msg_info "Writing nginx configuration"
 cat > /usr/local/nginx/conf/nginx.conf << 'NGINXCONF'
 worker_processes auto;
 error_log /dev/shm/logs/nginx/current warn;
+
 events { worker_connections 1024; }
+
 http {
     include mime.types;
     default_type application/octet-stream;
@@ -413,10 +418,60 @@ http {
     upstream frigate_api { server 127.0.0.1:5001; }
     upstream frigate_mqtt_ws { server 127.0.0.1:5002; }
 
+    # ── Port 8971: Authenticated access (main UI) ──
+    server {
+        listen 8971;
+
+        location /ws {
+            proxy_pass http://frigate_mqtt_ws/ws;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_read_timeout 86400;
+        }
+
+        location /api/ {
+            proxy_pass http://frigate_api/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_buffering off;
+        }
+
+        location /live/jsmpeg/ {
+            proxy_pass http://127.0.0.1:8082/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_read_timeout 86400;
+        }
+
+        location /live/ {
+            proxy_pass http://127.0.0.1:1984/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+        }
+
+        location /assets/ { alias /opt/frigate/web/dist/assets/; }
+        location /fonts/ { alias /opt/frigate/web/dist/fonts/; }
+        location /images/ { alias /opt/frigate/web/dist/images/; }
+        location /locales/ { alias /opt/frigate/web/dist/locales/; }
+
+        location / {
+            root /opt/frigate/web/dist;
+            try_files $uri /index.html;
+        }
+    }
+
+    # ── Port 5000: Unauthenticated internal access ──
     server {
         listen 5000;
 
-        # Event websocket
         location /ws {
             proxy_pass http://frigate_mqtt_ws/ws;
             proxy_http_version 1.1;
@@ -427,7 +482,6 @@ http {
             proxy_read_timeout 86400;
         }
 
-        # Frigate API — strip /api/ prefix, bypass auth
         location /api/ {
             proxy_pass http://frigate_api/;
             proxy_http_version 1.1;
@@ -439,7 +493,6 @@ http {
             proxy_buffering off;
         }
 
-        # jsmpeg live camera streams (port 8082)
         location /live/jsmpeg/ {
             proxy_pass http://127.0.0.1:8082/;
             proxy_http_version 1.1;
@@ -449,7 +502,6 @@ http {
             proxy_read_timeout 86400;
         }
 
-        # go2rtc live streams
         location /live/ {
             proxy_pass http://127.0.0.1:1984/;
             proxy_http_version 1.1;
@@ -458,13 +510,11 @@ http {
             proxy_set_header Host $host;
         }
 
-        # Static assets
         location /assets/ { alias /opt/frigate/web/dist/assets/; }
         location /fonts/ { alias /opt/frigate/web/dist/fonts/; }
         location /images/ { alias /opt/frigate/web/dist/images/; }
         location /locales/ { alias /opt/frigate/web/dist/locales/; }
 
-        # SPA fallback
         location / {
             root /opt/frigate/web/dist;
             try_files $uri /index.html;
@@ -475,7 +525,7 @@ NGINXCONF
 msg_ok "nginx configuration written"
 
 # ─────────────────────────────────────────────
-# FIX #6/#10/#12: Systemd services with log capture
+# Systemd services
 # ─────────────────────────────────────────────
 msg_info "Creating systemd services"
 
@@ -494,23 +544,25 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
 
-# go2rtc with log capture
-cat > /etc/systemd/system/go2rtc.service << 'GOEOF'
+# go2rtc
+cat > /etc/systemd/system/go2rtc.service << 'EOF'
 [Unit]
 Description=go2rtc
 After=network.target frigate-shm.service
 
 [Service]
-ExecStart=/bin/bash -c "/usr/local/go2rtc/bin/go2rtc -config /config/go2rtc.yaml 2>&1 | tee /dev/shm/logs/go2rtc/current"
-Restart=on-failure
+ExecStart=/usr/local/go2rtc/bin/go2rtc -config /config/go2rtc.yaml
+StandardOutput=append:/dev/shm/logs/go2rtc/current
+StandardError=append:/dev/shm/logs/go2rtc/current
+Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-GOEOF
+EOF
 
-# Frigate with log capture
-cat > /etc/systemd/system/frigate.service << 'FRIEOF'
+# Frigate
+cat > /etc/systemd/system/frigate.service << 'EOF'
 [Unit]
 Description=Frigate NVR
 After=network.target frigate-shm.service go2rtc.service
@@ -518,28 +570,30 @@ After=network.target frigate-shm.service go2rtc.service
 [Service]
 WorkingDirectory=/opt/frigate
 Environment="CONFIG_FILE=/config/config.yml"
-ExecStart=/bin/bash -c "/usr/bin/python3 -m frigate 2>&1 | tee /dev/shm/logs/frigate/current"
-Restart=on-failure
+ExecStart=/usr/bin/python3 -m frigate
+StandardOutput=append:/dev/shm/logs/frigate/current
+StandardError=append:/dev/shm/logs/frigate/current
+Restart=always
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-FRIEOF
+EOF
 
-# nginx — logs via config directives, not tee
-cat > /etc/systemd/system/frigate-nginx.service << 'NGEOF'
+# nginx
+cat > /etc/systemd/system/frigate-nginx.service << 'EOF'
 [Unit]
 Description=Frigate Nginx Proxy
 After=network.target frigate.service
 
 [Service]
 ExecStart=/usr/local/nginx/sbin/nginx -g "daemon off;"
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-NGEOF
+EOF
 
 systemctl daemon-reload
 systemctl enable -q frigate-shm go2rtc frigate frigate-nginx
@@ -557,7 +611,6 @@ msg_ok "Systemd services created and started"
 # Capture auto-generated Frigate credentials
 # ─────────────────────────────────────────────
 FRIGATE_PASS=$(journalctl -u frigate --no-pager 2>/dev/null | grep -oP 'Password: \K\S+' | tail -1)
-FRIGATE_USER="admin"
 
 # ─────────────────────────────────────────────
 # Update utility
@@ -623,7 +676,7 @@ msg_ok "Update utility ready (run 'update' to check for updates)"
 # ─────────────────────────────────────────────
 msg_info "Setting up MOTD"
 IP=$(hostname -I | awk '{print $1}')
-cat > /etc/motd << EOF
+cat > /etc/motd << MOTDEOF
 
   Frigate NVR LXC Container
   🌐   Provided by: Mati-l33t | proxmox-scripts.com
@@ -631,10 +684,12 @@ cat > /etc/motd << EOF
   🖥️   OS: $(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
   🏠   Hostname: $(hostname)
   💡   IP Address: ${IP}
+  🔐   Web UI: http://${IP}:8971
+  🔓   Internal: http://${IP}:5000
   📝   Config: /config/config.yml
   🔄   Update: run 'update'
 
-EOF
+MOTDEOF
 msg_ok "MOTD configured"
 
 # ─────────────────────────────────────────────
@@ -657,10 +712,12 @@ else
   msg_ok "Detector: CPU/TFLite with ${DETECT_THREADS} threads"
 fi
 IP=$(hostname -I | awk '{print $1}')
-msg_ok "Web UI (no auth): http://${IP}:5000"
+echo ""
+msg_ok "Web UI: http://${IP}:8971"
 if [ -n "${FRIGATE_PASS:-}" ]; then
-  msg_ok "Default login: ${FRIGATE_USER} / ${FRIGATE_PASS}"
+  msg_ok "Login: admin / ${FRIGATE_PASS}"
 else
-  msg_ok "Login credentials in: journalctl -u frigate | grep Password"
+  msg_ok "Login: check 'journalctl -u frigate | grep Password'"
 fi
+msg_ok "Internal (no auth): http://${IP}:5000"
 msg_ok "Config: /config/config.yml"
