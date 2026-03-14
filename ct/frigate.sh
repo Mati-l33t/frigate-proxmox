@@ -80,22 +80,24 @@ select_storage() {
 # ─────────────────────────────────────────────
 get_template() {
   local storage="$1"
+  local TEMPLATE_NAME="debian-12-standard_12.12-1_amd64.tar.zst"
+
+  # Check if template already exists locally
   local existing
-  existing=$(pveam list "$storage" 2>/dev/null | awk '/debian-12/ {print $1}' | tail -1)
+  existing=$(pveam list "$storage" 2>/dev/null | awk '{print $1}' | grep -F "$TEMPLATE_NAME" | head -1)
   if [ -n "$existing" ]; then
     echo "$existing"
     return
   fi
+
+  # Download the exact template
   msg_info "Downloading Debian 12 template"
   pveam update >/dev/null 2>&1
-  local tmpl
-  tmpl=$(pveam available --section system 2>/dev/null | awk '/debian-12/ {print $2}' | tail -1)
-  if [ -z "$tmpl" ]; then
-    msg_error "Debian 12 template not found"
+  if ! pveam download "$storage" "$TEMPLATE_NAME" >/dev/null 2>&1; then
+    msg_error "Failed to download Debian 12 template"
     exit 1
   fi
-  pveam download "$storage" "$tmpl" >/dev/null 2>&1
-  echo "${storage}:vztmpl/${tmpl}"
+  echo "${storage}:vztmpl/${TEMPLATE_NAME}"
 }
 
 # ─────────────────────────────────────────────
