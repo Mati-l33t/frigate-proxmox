@@ -84,7 +84,7 @@ FRIGATE_RELEASE=$(curl -fsSL https://api.github.com/repos/blakeblackshear/frigat
   | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' | grep -oE '^v[0-9]+\.[0-9]+\.[0-9]+')
 mkdir -p /opt/frigate
 cd /opt/frigate
-git clone --depth 1 --branch "${FRIGATE_RELEASE}" \
+git -c advice.detachedHead=false clone --depth 1 --branch "${FRIGATE_RELEASE}" \
   https://github.com/blakeblackshear/frigate.git . -q
 msg_ok "Fetched Frigate ${FRIGATE_RELEASE}"
 
