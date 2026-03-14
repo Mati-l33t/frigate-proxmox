@@ -102,6 +102,21 @@ msg_ok "Frigate system dependencies installed"
 # Build nginx
 # ─────────────────────────────────────────────
 msg_info "Building nginx (this will take a while)"
+# Add debian.sources needed by build_nginx.sh
+if [ ! -f /etc/apt/sources.list.d/debian.sources ]; then
+  cat > /etc/apt/sources.list.d/debian.sources << 'SOURCES'
+Types: deb deb-src
+URIs: http://deb.debian.org/debian
+Suites: bookworm bookworm-updates
+Components: main
+
+Types: deb deb-src
+URIs: http://security.debian.org/debian-security
+Suites: bookworm-security
+Components: main
+SOURCES
+  apt-get update -qq
+fi
 bash /opt/frigate/docker/main/build_nginx.sh >/dev/null 2>&1
 ln -sf /usr/local/nginx/sbin/nginx /usr/local/bin/nginx 2>/dev/null || true
 sed -e '/s6-notifyoncheck/ s/^#*/#/' \
