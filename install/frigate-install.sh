@@ -442,8 +442,13 @@ sleep 10
 systemctl start frigate-nginx
 msg_ok "Systemd services created and started"
 
-# ── Capture credentials ──
-FRIGATE_PASS=$(grep -oP 'Password: \K\S+' /dev/shm/logs/frigate/current 2>/dev/null | tail -1 || true)
+# ── Capture credentials (retry loop — Frigate needs time to generate) ──
+FRIGATE_PASS=""
+for i in $(seq 1 12); do
+  FRIGATE_PASS=$(grep -oP 'Password: \K\S+' /dev/shm/logs/frigate/current 2>/dev/null | tail -1 || true)
+  [ -n "$FRIGATE_PASS" ] && break
+  sleep 5
+done
 
 # ── Update utility ──
 msg_info "Setting up update utility"
@@ -520,6 +525,9 @@ msg_info "Cleaning up"
 apt-get autoremove -y -qq
 apt-get autoclean -qq
 rm -f /tmp/frigate-install.sh
+# Re-apply auto-login (package installs can reset getty)
+systemctl daemon-reload
+systemctl restart container-getty@1 2>/dev/null || true
 msg_ok "Cleaned up"
 
 # ── Done ──
