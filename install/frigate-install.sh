@@ -459,7 +459,7 @@ YW="\033[33m"; CM="\033[0;92m"; CL="\033[m"; TAB="  "
 msg_info() { echo -e "${TAB}${YW}  ⏳ ${1}...${CL}"; }
 msg_ok()   { echo -e "${TAB}${CM}  ✔️   ${1}${CL}"; }
 
-CURRENT=$(/usr/bin/python3 -c "from frigate.version import VERSION; print(VERSION)" 2>/dev/null || echo "unknown")
+CURRENT=$(cd /opt/frigate && /usr/bin/python3 -c "from frigate.version import VERSION; print(VERSION)" 2>/dev/null || echo "unknown")
 LATEST=$(curl -fsSL https://api.github.com/repos/blakeblackshear/frigate/releases/latest \
   | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
 LATEST_VER="${LATEST#v}"
