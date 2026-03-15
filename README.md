@@ -25,7 +25,7 @@ A standalone Proxmox VE script that installs [Frigate NVR](https://frigate.video
 Run the following command in your **Proxmox host shell**:
 
 ```bash
-under construction
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Mati-l33t/frigate-proxmox/main/ct/frigate.sh)"
 ```
 
 ---
