@@ -410,7 +410,7 @@ build_container
 run_install
 
 # Get the auto-generated Frigate password
-FRIGATE_PASS=$(pct exec "$CTID" -- journalctl -u frigate --no-pager 2>/dev/null | grep -oP 'Password: \K\S+' | tail -1)
+FRIGATE_PASS=$(pct exec "$CTID" -- grep -oP 'Password: \K\S+' /dev/shm/logs/frigate/current 2>/dev/null | tail -1 || true)
 
 echo ""
 msg_ok "Frigate installation complete!"
