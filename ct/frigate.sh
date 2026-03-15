@@ -409,8 +409,13 @@ echo -e "${TAB}${BOLD}🚀 Creating Frigate LXC...${CL}"
 build_container
 run_install
 
-# Get the auto-generated Frigate password
-FRIGATE_PASS=$(pct exec "$CTID" -- grep -oP 'Password: \K\S+' /dev/shm/logs/frigate/current 2>/dev/null | tail -1 || true)
+# Get the auto-generated Frigate password (retry — may take time on slow hardware)
+FRIGATE_PASS=""
+for i in $(seq 1 6); do
+  FRIGATE_PASS=$(pct exec "$CTID" -- grep -oP 'Password: \K\S+' /dev/shm/logs/frigate/current 2>/dev/null | tail -1 || true)
+  [ -n "$FRIGATE_PASS" ] && break
+  sleep 5
+done
 
 echo ""
 msg_ok "Frigate installation complete!"
