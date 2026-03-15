@@ -26,6 +26,7 @@ cat > /etc/systemd/system/container-getty@1.service.d/override.conf << 'EOF'
 ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud tty%I 115200,38400,9600 $TERM
 EOF
+systemctl daemon-reload
 
 # ── Disable IPv6 ──
 cat >> /etc/sysctl.conf << 'EOF'
@@ -442,7 +443,7 @@ systemctl start frigate-nginx
 msg_ok "Systemd services created and started"
 
 # ── Capture credentials ──
-FRIGATE_PASS=$(journalctl -u frigate --no-pager 2>/dev/null | grep -oP 'Password: \K\S+' | tail -1)
+FRIGATE_PASS=$(grep -oP 'Password: \K\S+' /dev/shm/logs/frigate/current 2>/dev/null | tail -1 || true)
 
 # ── Update utility ──
 msg_info "Setting up update utility"
@@ -535,7 +536,7 @@ msg_ok "Web UI: http://${IP}:8971"
 if [ -n "${FRIGATE_PASS:-}" ]; then
   msg_ok "Login: admin / ${FRIGATE_PASS}"
 else
-  msg_ok "Login: check 'journalctl -u frigate | grep Password'"
+  msg_ok "Login: check 'grep Password /dev/shm/logs/frigate/current'"
 fi
 msg_ok "Internal (no auth): http://${IP}:5000"
 msg_ok "Config: /config/config.yml"
